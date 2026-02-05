@@ -239,7 +239,7 @@ static void DeserializeArrayPropertyFromJsonObjectField(void* FieldData, UObject
 		else if (TestObjectProperty) {
 			if (FieldValue->Type != EJson::Object) continue;
 
-			UObject* SubObject = nullptr;
+			UObject* SubObject = (UObject*)InnerPropData;
 
 			if (FieldValue->Type == EJson::Object) {
 				FJsonSerializationModule::DeserializeJsonToUObject(SubObject, FieldValue->AsObject(), bIncludeObjectClasses);
@@ -283,10 +283,11 @@ static void DeserializePropertyFromJsonObjectField(void* Data, UObject* Owner, T
 		}
 	}
 	else if (FStructProperty* StructProperty = CastField<FStructProperty>(Property)) {
-
+		if (FieldValue->Type != EJson::Object) return;
+		DeserializeStructPropertyFromJsonObjectField(FieldData, Owner, FieldValue->AsObject(), StructProperty, bIncludeObjectClasses);
 	}
 	else if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(Property)) {
-		UObject* SubObject = nullptr;
+		UObject* SubObject = (UObject*)FieldData;
 
 		if (FieldValue->Type == EJson::Object) {
 			FJsonSerializationModule::DeserializeJsonToUObject(SubObject, FieldValue->AsObject(), bIncludeObjectClasses);
