@@ -24,6 +24,7 @@ struct FPropertyTest {
 		Raw = Property;
 		AsArray = CastField< FArrayProperty>(Property);
 		AsSet = CastField< FSetProperty>(Property);
+		AsMap = CastField< FMapProperty>(Property);
 		AsStruct = CastField< FStructProperty>(Property);
 		AsObject = CastField< FObjectProperty>(Property);
 	};
@@ -31,6 +32,7 @@ struct FPropertyTest {
 	FProperty* Raw;
 	FArrayProperty* AsArray;
 	FSetProperty* AsSet;
+	FMapProperty* AsMap;
 	FStructProperty* AsStruct;
 	FObjectProperty* AsObject;
 };
@@ -39,6 +41,7 @@ static void SerializePropertyAsJsonObjectField(const void* Data, const UObject* 
 static void SerializeStructPropertyAsJsonObjectField(const void* InnerPropData, const UObject* Outer, FStructProperty* StructProperty, TSharedPtr<FJsonObject> StructObject, TSet<const UObject*>& TraversedObjects, bool bIncludeObjectClasses, bool bChangedPropertiesOnly);
 static TArray<TSharedPtr<FJsonValue>> SerializeArrayPropertyAsJsonArray(const void* Data, const UObject* Outer, FArrayProperty* Property, TSet<const UObject*>& TraversedObjects, bool bIncludeObjectClasses, bool bChangedPropertiesOnly);
 static TArray<TSharedPtr<FJsonValue>> SerializeSetPropertyAsJsonArray(const void* Data, const UObject* Outer, FSetProperty* Property, TSet<const UObject*>& TraversedObjects, bool bIncludeObjectClasses, bool bChangedPropertiesOnly);
+static TArray<TSharedPtr<FJsonValue>> SerializeMapPropertyAsJsonArray(const void* Data, const UObject* Outer, FMapProperty* Property, TSet<const UObject*>& TraversedObjects, bool bIncludeObjectClasses, bool bChangedPropertiesOnly);
 
 static void SerializeStructPropertyAsJsonObjectField(const void* InnerPropData, const UObject* Outer, FStructProperty* StructProperty, TSharedPtr<FJsonObject> StructObject, TSet<const UObject*>& TraversedObjects, bool bIncludeObjectClasses, bool bChangedPropertiesOnly)
 {
@@ -79,6 +82,11 @@ static TArray<TSharedPtr<FJsonValue>> SerializeArrayPropertyAsJsonArray(const vo
 		if (TestProp.AsSet) // Set
 		{
 			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeSetPropertyAsJsonArray(InnerPropData, Outer, TestProp.AsSet, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			ValueArray.Emplace(new FJsonValueArray(InnerArray));
+		}
+		if (TestProp.AsMap) // Map
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeMapPropertyAsJsonArray(InnerPropData, Outer, TestProp.AsMap, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
 			ValueArray.Emplace(new FJsonValueArray(InnerArray));
 		}
 		else if (TestProp.AsStruct) // Struct
@@ -143,6 +151,11 @@ static TArray<TSharedPtr<FJsonValue>> SerializeSetPropertyAsJsonArray(const void
 			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeSetPropertyAsJsonArray(InnerPropData, Outer, TestProp.AsSet, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
 			ValueArray.Emplace(new FJsonValueArray(InnerArray));
 		}
+		if (TestProp.AsMap) // Map
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeMapPropertyAsJsonArray(InnerPropData, Outer, TestProp.AsMap, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			ValueArray.Emplace(new FJsonValueArray(InnerArray));
+		}
 		else if (TestProp.AsStruct) // Struct
 		{
 			TSharedPtr<FJsonObject> StructObject = MakeShareable(new FJsonObject);
@@ -185,6 +198,135 @@ static TArray<TSharedPtr<FJsonValue>> SerializeSetPropertyAsJsonArray(const void
 }
 
 
+static TArray<TSharedPtr<FJsonValue>> SerializeMapPropertyAsJsonArray(const void* Data, const UObject* Outer, FMapProperty* Property, TSet<const UObject*>& TraversedObjects, bool bIncludeObjectClasses, bool bChangedPropertiesOnly) {
+	
+	const uint8* PropData = Property->ContainerPtrToValuePtr<uint8>(Data);
+	FScriptMapHelper Helper(Property, PropData);
+	TArray<TSharedPtr<FJsonValue>> ValueArray;
+
+	FPropertyTest TestKey = FPropertyTest(Helper.KeyProp);
+	FPropertyTest TestValue = FPropertyTest(Helper.ValueProp);
+	UE_LOG(LogTemp, Log, TEXT("Map"))
+	for (FScriptMapHelper::FIterator Iter = Helper.CreateIterator(); Iter; Iter++) {
+		TSharedPtr<FJsonObject> KeyVal = MakeShared< FJsonObject>();
+
+		uint8* KeyData = Helper.GetKeyPtr(*Iter);
+		uint8* ValueData = Helper.GetValuePtr(*Iter);
+
+		UE_LOG(LogTemp, Log, TEXT("MapIter"))
+		if (KeyData == nullptr || ValueData == nullptr) continue;
+		UE_LOG(LogTemp, Log, TEXT("MapEntry"))
+		if (TestKey.AsArray) // Array
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeArrayPropertyAsJsonArray(KeyData, Outer, TestKey.AsArray, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetArrayField("Key", InnerArray);
+		}
+		if (TestKey.AsSet) // Set
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeSetPropertyAsJsonArray(KeyData, Outer, TestKey.AsSet, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetArrayField("Key", InnerArray);
+		}
+		if (TestKey.AsMap) // Map
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeMapPropertyAsJsonArray(KeyData, Outer, TestKey.AsMap, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetArrayField("Key", InnerArray);
+		}
+		else if (TestKey.AsStruct) // Struct
+		{
+			TSharedPtr<FJsonObject> StructObject = MakeShareable(new FJsonObject);
+			SerializeStructPropertyAsJsonObjectField(KeyData, Outer, TestKey.AsStruct, StructObject, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetObjectField("Key", StructObject);
+		}
+		else if (TestKey.AsObject) // Object
+		{
+			const UObject* SubObject = TestKey.AsObject->GetObjectPropertyValue_InContainer(KeyData);
+			if (SubObject->IsValidLowLevel() && SubObject->GetOuter() == Outer && !TraversedObjects.Contains(SubObject))
+			{
+				TraversedObjects.Add(SubObject);
+				TSharedPtr<FJsonObject> JsonSubObject = MakeShared<FJsonObject>();
+				TSharedPtr<FJsonObject> JsonSubObjectProperties = JsonSubObject;
+
+				if (bIncludeObjectClasses) {
+					JsonSubObjectProperties = MakeShared<FJsonObject>();
+					JsonSubObject->SetStringField(FJsonSerializerFields::ObjectClassField.ToString(), SubObject->GetClass()->GetPathName());
+					JsonSubObject->SetObjectField(FJsonSerializerFields::ObjectPropertiesField.ToString(), JsonSubObjectProperties);
+				}
+
+				for (TFieldIterator<FProperty> PropertyItr(SubObject->GetClass()); PropertyItr; ++PropertyItr)
+				{
+					SerializePropertyAsJsonObjectField(SubObject, SubObject, JsonSubObjectProperties, *PropertyItr, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+				}
+				KeyVal->SetObjectField("Key", JsonSubObject);
+			}
+			else {
+				KeyVal->SetStringField("Key", SubObject->GetPathName());
+			}
+		}
+		else
+		{
+			TSharedPtr<FJsonValue> JsonValue;
+			KeyVal->SetField("Key", FJsonObjectConverter::UPropertyToJsonValue(TestKey.Raw, KeyData));
+		}
+
+		if (TestValue.AsArray) // Array
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeArrayPropertyAsJsonArray(ValueData, Outer, TestValue.AsArray, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetArrayField("Value", InnerArray);
+		}
+		if (TestValue.AsSet) // Set
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeSetPropertyAsJsonArray(ValueData, Outer, TestValue.AsSet, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetArrayField("Value", InnerArray);
+		}
+		if (TestValue.AsMap) // Map
+		{
+			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeMapPropertyAsJsonArray(ValueData, Outer, TestValue.AsMap, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetArrayField("Value", InnerArray);
+		}
+		else if (TestValue.AsStruct) // Struct
+		{
+			TSharedPtr<FJsonObject> StructObject = MakeShareable(new FJsonObject);
+			SerializeStructPropertyAsJsonObjectField(ValueData, Outer, TestValue.AsStruct, StructObject, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+			KeyVal->SetObjectField("Value", StructObject);
+		}
+		else if (TestValue.AsObject) // Object
+		{
+			const UObject* SubObject = TestValue.AsObject->GetObjectPropertyValue_InContainer(ValueData);
+			if (SubObject->IsValidLowLevel() && SubObject->GetOuter() == Outer && !TraversedObjects.Contains(SubObject))
+			{
+				TraversedObjects.Add(SubObject);
+				TSharedPtr<FJsonObject> JsonSubObject = MakeShared<FJsonObject>();
+				TSharedPtr<FJsonObject> JsonSubObjectProperties = JsonSubObject;
+
+				if (bIncludeObjectClasses) {
+					JsonSubObjectProperties = MakeShared<FJsonObject>();
+					JsonSubObject->SetStringField(FJsonSerializerFields::ObjectClassField.ToString(), SubObject->GetClass()->GetPathName());
+					JsonSubObject->SetObjectField(FJsonSerializerFields::ObjectPropertiesField.ToString(), JsonSubObjectProperties);
+				}
+
+				for (TFieldIterator<FProperty> PropertyItr(SubObject->GetClass()); PropertyItr; ++PropertyItr)
+				{
+					SerializePropertyAsJsonObjectField(SubObject, SubObject, JsonSubObjectProperties, *PropertyItr, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+				}
+				KeyVal->SetObjectField("Value", JsonSubObject);
+			}
+			else {
+				KeyVal->SetStringField("Value", SubObject->GetPathName());
+			}
+		}
+		else
+		{
+			TSharedPtr<FJsonValue> JsonValue;
+			KeyVal->SetField("Value", FJsonObjectConverter::UPropertyToJsonValue(TestValue.Raw, ValueData));
+		}
+
+
+		ValueArray.Emplace(new FJsonValueObject(KeyVal));
+	}
+	
+	return ValueArray;
+}
+
 static void SerializePropertyAsJsonObjectField(const void* Data, const UObject* Outer, TSharedPtr<FJsonObject> OuterObject, FProperty* Property, TSet<const UObject*>& TraversedObjects, bool bIncludeObjectClasses, bool bChangedPropertiesOnly)
 {
 	if (Property->GetName() == "UberGraphFrame"
@@ -206,6 +348,11 @@ static void SerializePropertyAsJsonObjectField(const void* Data, const UObject* 
 	if (TestProp.AsSet) // Set
 	{
 		TArray<TSharedPtr<FJsonValue>> Values = SerializeSetPropertyAsJsonArray(Data, Outer, TestProp.AsSet, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
+		OuterObject->SetArrayField(Property->GetAuthoredName(), Values);
+	}
+	if (TestProp.AsMap) // Map
+	{
+		TArray<TSharedPtr<FJsonValue>> Values = SerializeMapPropertyAsJsonArray(Data, Outer, TestProp.AsMap, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
 		OuterObject->SetArrayField(Property->GetAuthoredName(), Values);
 	}
 	else if (TestProp.AsStruct) // Struct
