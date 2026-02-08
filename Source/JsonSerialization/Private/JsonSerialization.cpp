@@ -420,6 +420,8 @@ TSharedPtr<FJsonObject> FJsonSerializationModule::SerializeUObjectToJson(const U
 static bool HasObjectFields(TSharedPtr<FJsonObject> JsonObject);
 static void DeserializePropertyFromJsonObjectField(void* Data, UObject* Owner, TSharedPtr<FJsonObject> JsonObjectProperties, FProperty* Property, bool bIncludeObjectClasses);
 static void DeserializeArrayPropertyFromJsonObjectField(void* FieldData, UObject* Owner, TArray<TSharedPtr<FJsonValue>> JsonArrayField, FArrayProperty* ArrayProperty, bool bIncludeObjectClasses);
+static void DeserializeSetPropertyFromJsonObjectField(void* FieldData, UObject* Owner, TArray<TSharedPtr<FJsonValue>> JsonArrayField, FSetProperty* SetProperty, bool bIncludeObjectClasses);
+static void DeserializeMapPropertyFromJsonObjectField(void* FieldData, UObject* Owner, TArray<TSharedPtr<FJsonValue>> JsonArrayField, FMapProperty* MapProperty, bool bIncludeObjectClasses);
 static void DeserializeStructPropertyFromJsonObjectField(void* FieldData, UObject* Owner, TSharedPtr<FJsonObject> JsonStructField, FStructProperty* StructProperty, bool bIncludeObjectClasses);
 
 
@@ -460,51 +462,253 @@ static void DeserializeArrayPropertyFromJsonObjectField(void* FieldData, UObject
 
 
 	FScriptArrayHelper Helper(ArrayProperty, FieldData);
+	Helper.Resize(0);
 	Helper.AddValues(JsonArrayField.Num());
 
-	FProperty* InnerProperty = ArrayProperty->Inner;
-
-
-	FArrayProperty* TestArrayProperty = CastField< FArrayProperty>(InnerProperty);
-	FObjectProperty* TestObjectProperty = CastField< FObjectProperty>(InnerProperty);
-	FStructProperty* TestStructProperty = CastField< FStructProperty>(InnerProperty);
+	FPropertyTest TestProperty = FPropertyTest(ArrayProperty->Inner);
 
 	for (int32 i = 0, n = Helper.Num(); i < n; ++i) {
 
 		TSharedPtr<FJsonValue> FieldValue = JsonArrayField[i];
 		void* InnerPropData = Helper.GetRawPtr(i);
 
-		if (TestArrayProperty) {
+		if (TestProperty.AsArray) {
 			if (FieldValue->Type != EJson::Array) continue;
 
-			DeserializeArrayPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsArray(), TestArrayProperty, bIncludeObjectClasses);
+			DeserializeArrayPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsArray(), TestProperty.AsArray, bIncludeObjectClasses);
 		}
-		else if (TestStructProperty) {
-			if (FieldValue->Type != EJson::Object) continue;
-			DeserializeStructPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsObject(), TestStructProperty, bIncludeObjectClasses);
+		if (TestProperty.AsSet) {
+			if (FieldValue->Type != EJson::Array) continue;
+
+			DeserializeSetPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsArray(), TestProperty.AsSet, bIncludeObjectClasses);
 		}
-		else if (TestObjectProperty) {
+		if (TestProperty.AsMap) {
+			if (FieldValue->Type != EJson::Array) continue;
+
+			DeserializeMapPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsArray(), TestProperty.AsMap, bIncludeObjectClasses);
+		}
+		else if (TestProperty.AsStruct) {
 			if (FieldValue->Type != EJson::Object) continue;
+			DeserializeStructPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsObject(), TestProperty.AsStruct, bIncludeObjectClasses);
+		}
+		else if (TestProperty.AsObject) {
+			if (FieldValue->Type != EJson::Object && FieldValue->Type == EJson::String) continue;
 
 			UObject* SubObject = (UObject*)InnerPropData;
+			bool bIsSubObjectToImport = FieldValue->Type == EJson::Object;
 
-			if (FieldValue->Type == EJson::Object) {
+			if (bIsSubObjectToImport) {
 				FJsonSerializationModule::DeserializeJsonToUObject(SubObject, FieldValue->AsObject(), bIncludeObjectClasses);
 			}
+			else if (FieldValue->Type == EJson::String) {
+				FString ObjectPathName = FieldValue->AsString();
+				SubObject = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPathName);
+			}
 
-			if (SubObject != nullptr) {
+			if (SubObject != nullptr && bIsSubObjectToImport) {
 				SubObject->Rename(nullptr, Owner);
 			}
 
-			TestObjectProperty->SetPropertyValue(InnerPropData, SubObject);
+			TestProperty.AsObject->SetPropertyValue(InnerPropData, SubObject);
 		}
 		else {
 
-			FJsonObjectConverter::JsonValueToUProperty(FieldValue, InnerProperty, InnerPropData);
+			FJsonObjectConverter::JsonValueToUProperty(FieldValue, TestProperty.Raw, InnerPropData);
 		}
 	}
 
 
+}
+
+static void DeserializeSetPropertyFromJsonObjectField(void* FieldData, UObject* Owner, TArray<TSharedPtr<FJsonValue>> JsonArrayField, FSetProperty* SetProperty, bool bIncludeObjectClasses) {
+	if (FieldData == nullptr
+		|| Owner == nullptr
+		|| SetProperty == nullptr)
+	{
+		return;
+	}
+
+
+	FScriptSetHelper Helper(SetProperty, FieldData);
+	Helper.EmptyElements(JsonArrayField.Num());
+	FPropertyTest TestProperty = FPropertyTest(SetProperty->ElementProp);
+
+	for (int32 i = 0, n = JsonArrayField.Num(); i < n; ++i) {
+
+		TSharedPtr<FJsonValue> FieldValue = JsonArrayField[i];
+
+		int32 NewIndex = Helper.AddDefaultValue_Invalid_NeedsRehash();
+		void* InnerPropData = Helper.GetElementPtr(NewIndex);
+
+		if (TestProperty.AsArray) {
+			if (FieldValue->Type != EJson::Array) continue;
+
+			DeserializeArrayPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsArray(), TestProperty.AsArray, bIncludeObjectClasses);
+		}
+		if (TestProperty.AsSet) {
+			if (FieldValue->Type != EJson::Array) continue;
+
+			DeserializeSetPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsArray(), TestProperty.AsSet, bIncludeObjectClasses);
+		}
+		if (TestProperty.AsMap) {
+			if (FieldValue->Type != EJson::Array) continue;
+
+			DeserializeMapPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsArray(), TestProperty.AsMap, bIncludeObjectClasses);
+		}
+		else if (TestProperty.AsStruct) {
+			if (FieldValue->Type != EJson::Object) continue;
+			DeserializeStructPropertyFromJsonObjectField(InnerPropData, Owner, FieldValue->AsObject(), TestProperty.AsStruct, bIncludeObjectClasses);
+		}
+		else if (TestProperty.AsObject) {
+			if (FieldValue->Type != EJson::Object && FieldValue->Type == EJson::String) continue;
+
+			UObject* SubObject = (UObject*)InnerPropData;
+			bool bIsSubObjectToImport = FieldValue->Type == EJson::Object;
+
+			if (bIsSubObjectToImport) {
+				FJsonSerializationModule::DeserializeJsonToUObject(SubObject, FieldValue->AsObject(), bIncludeObjectClasses);
+			}
+			else if (FieldValue->Type == EJson::String) {
+				FString ObjectPathName = FieldValue->AsString();
+				SubObject = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPathName);
+			}
+
+			if (SubObject != nullptr && bIsSubObjectToImport) {
+				SubObject->Rename(nullptr, Owner);
+			}
+
+			TestProperty.AsObject->SetPropertyValue(InnerPropData, SubObject);
+		}
+		else {
+
+			FJsonObjectConverter::JsonValueToUProperty(FieldValue, TestProperty.Raw, InnerPropData);
+		}
+	}
+
+	Helper.Rehash();
+}
+
+void DeserializeMapPropertyFromJsonObjectField(void* FieldData, UObject* Owner, TArray<TSharedPtr<FJsonValue>> JsonArrayField, FMapProperty* MapProperty, bool bIncludeObjectClasses)
+{
+	if (FieldData == nullptr
+		|| Owner == nullptr
+		|| MapProperty == nullptr)
+	{
+		return;
+	}
+
+
+	FScriptMapHelper Helper(MapProperty, FieldData);
+	Helper.EmptyValues(JsonArrayField.Num());
+
+	FPropertyTest TestKey = FPropertyTest(Helper.KeyProp);
+	FPropertyTest TestValue = FPropertyTest(Helper.ValueProp);
+
+	for (int32 i = 0, n = JsonArrayField.Num(); i < n; ++i) {
+
+		TSharedPtr<FJsonValue> FieldValue = JsonArrayField[i];
+
+		if (FieldValue->Type != EJson::Object) continue;
+
+		TSharedPtr<FJsonObject> KeyValObject = FieldValue->AsObject();
+		TSharedPtr<FJsonValue> KeyValue = KeyValObject->GetField<EJson::None>("Key");
+		TSharedPtr<FJsonValue> ValValue = KeyValObject->GetField<EJson::None>("Value");
+
+		int32 NewIndex = Helper.AddDefaultValue_Invalid_NeedsRehash();
+		void* KeyData = Helper.GetKeyPtr(NewIndex);
+		void* ValueData = Helper.GetValuePtr(NewIndex);
+
+		if (TestKey.AsArray) {
+			if (KeyValue->Type != EJson::Array) continue;
+
+			DeserializeArrayPropertyFromJsonObjectField(KeyData, Owner, KeyValue->AsArray(), TestKey.AsArray, bIncludeObjectClasses);
+		}
+		if (TestKey.AsSet) {
+			if (KeyValue->Type != EJson::Array) continue;
+
+			DeserializeSetPropertyFromJsonObjectField(KeyData, Owner, KeyValue->AsArray(), TestKey.AsSet, bIncludeObjectClasses);
+		}
+		if (TestKey.AsMap) {
+			if (KeyValue->Type != EJson::Array) continue;
+
+			DeserializeMapPropertyFromJsonObjectField(KeyData, Owner, KeyValue->AsArray(), TestKey.AsMap, bIncludeObjectClasses);
+		}
+		else if (TestKey.AsStruct) {
+			if (KeyValue->Type != EJson::Object) continue;
+			DeserializeStructPropertyFromJsonObjectField(KeyData, Owner, KeyValue->AsObject(), TestKey.AsStruct, bIncludeObjectClasses);
+		}
+		else if (TestKey.AsObject) {
+			if (KeyValue->Type != EJson::Object && KeyValue->Type != EJson::String) continue;
+
+			UObject* SubObject = (UObject*)KeyData;
+			bool bIsSubObjectToImport = KeyValue->Type == EJson::Object;
+
+			if (bIsSubObjectToImport) {
+				FJsonSerializationModule::DeserializeJsonToUObject(SubObject, KeyValue->AsObject(), bIncludeObjectClasses);
+			}
+			else if (KeyValue->Type == EJson::String) {
+				FString ObjectPathName = KeyValue->AsString();
+				SubObject = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPathName);
+			}
+
+			if (SubObject != nullptr && bIsSubObjectToImport) {
+				SubObject->Rename(nullptr, Owner);
+			}
+
+			TestKey.AsObject->SetPropertyValue(KeyData, SubObject);
+		}
+		else {
+
+			FJsonObjectConverter::JsonValueToUProperty(KeyValue, TestKey.Raw, KeyData);
+		}
+
+
+		if (TestValue.AsArray) {
+			if (ValValue->Type != EJson::Array) continue;
+
+			DeserializeArrayPropertyFromJsonObjectField(ValueData, Owner, ValValue->AsArray(), TestValue.AsArray, bIncludeObjectClasses);
+		}
+		if (TestValue.AsSet) {
+			if (ValValue->Type != EJson::Array) continue;
+
+			DeserializeSetPropertyFromJsonObjectField(ValueData, Owner, ValValue->AsArray(), TestValue.AsSet, bIncludeObjectClasses);
+		}
+		if (TestValue.AsMap) {
+			if (ValValue->Type != EJson::Array) continue;
+
+			DeserializeMapPropertyFromJsonObjectField(ValueData, Owner, ValValue->AsArray(), TestValue.AsMap, bIncludeObjectClasses);
+		}
+		else if (TestValue.AsStruct) {
+			if (ValValue->Type != EJson::Object) continue;
+			DeserializeStructPropertyFromJsonObjectField(ValueData, Owner, ValValue->AsObject(), TestValue.AsStruct, bIncludeObjectClasses);
+		}
+		else if (TestValue.AsObject) {
+			if (ValValue->Type != EJson::Object && ValValue->Type != EJson::String) continue;
+
+			UObject* SubObject = (UObject*)ValueData;
+			bool bIsSubObjectToImport = ValValue->Type == EJson::Object;
+
+			if (bIsSubObjectToImport) {
+				FJsonSerializationModule::DeserializeJsonToUObject(SubObject, ValValue->AsObject(), bIncludeObjectClasses);
+			}
+			else if (ValValue->Type == EJson::String) {
+				FString ObjectPathName = ValValue->AsString();
+				SubObject = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPathName);
+			}
+
+			if (SubObject != nullptr && bIsSubObjectToImport) {
+				SubObject->Rename(nullptr, Owner);
+			}
+
+			TestValue.AsObject->SetPropertyValue(ValueData, SubObject);
+		}
+		else {
+
+			FJsonObjectConverter::JsonValueToUProperty(ValValue, TestValue.Raw, ValueData);
+		}
+	}
+
+	Helper.Rehash();
 }
 
 static void DeserializePropertyFromJsonObjectField(void* Data, UObject* Owner, TSharedPtr<FJsonObject> JsonObjectProperties, FProperty* Property, bool bIncludeObjectClasses) {
@@ -516,6 +720,8 @@ static void DeserializePropertyFromJsonObjectField(void* Data, UObject* Owner, T
 		return;
 	}
 
+	FPropertyTest TestProperty = FPropertyTest(Property);
+
 	const FString PropertyName = Property->GetAuthoredName();
 
 	if (!JsonObjectProperties->HasField(PropertyName)) return;
@@ -523,28 +729,46 @@ static void DeserializePropertyFromJsonObjectField(void* Data, UObject* Owner, T
 	TSharedPtr<FJsonValue> FieldValue = JsonObjectProperties->GetField<EJson::None>(PropertyName);
 	void* FieldData = Property->ContainerPtrToValuePtr<void>(Data);
 
-	if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property)){
+	if (TestProperty.AsArray){
 		if (FieldValue->Type == EJson::Array) {
 			TArray<TSharedPtr<FJsonValue>> ArrayJson = FieldValue->AsArray();
-			DeserializeArrayPropertyFromJsonObjectField(FieldData, Owner, ArrayJson, ArrayProperty, bIncludeObjectClasses);
+			DeserializeArrayPropertyFromJsonObjectField(FieldData, Owner, ArrayJson, TestProperty.AsArray, bIncludeObjectClasses);
 		}
 	}
-	else if (FStructProperty* StructProperty = CastField<FStructProperty>(Property)) {
-		if (FieldValue->Type != EJson::Object) return;
-		DeserializeStructPropertyFromJsonObjectField(FieldData, Owner, FieldValue->AsObject(), StructProperty, bIncludeObjectClasses);
+	if (TestProperty.AsSet) {
+		if (FieldValue->Type == EJson::Array) {
+			TArray<TSharedPtr<FJsonValue>> ArrayJson = FieldValue->AsArray();
+			DeserializeSetPropertyFromJsonObjectField(FieldData, Owner, ArrayJson, TestProperty.AsSet, bIncludeObjectClasses);
+		}
 	}
-	else if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(Property)) {
+	if (TestProperty.AsMap) {
+		if (FieldValue->Type == EJson::Array) {
+			TArray<TSharedPtr<FJsonValue>> ArrayJson = FieldValue->AsArray();
+			DeserializeMapPropertyFromJsonObjectField(FieldData, Owner, ArrayJson, TestProperty.AsMap, bIncludeObjectClasses);
+		}
+	}
+	else if (TestProperty.AsStruct) {
+		if (FieldValue->Type != EJson::Object) return;
+		DeserializeStructPropertyFromJsonObjectField(FieldData, Owner, FieldValue->AsObject(), TestProperty.AsStruct, bIncludeObjectClasses);
+	}
+	else if (TestProperty.AsObject) {
 		UObject* SubObject = (UObject*)FieldData;
 
-		if (FieldValue->Type == EJson::Object) {
+		bool bIsSubObjectToImport = FieldValue->Type == EJson::Object;
+
+		if (bIsSubObjectToImport) {
 			FJsonSerializationModule::DeserializeJsonToUObject(SubObject, FieldValue->AsObject(), bIncludeObjectClasses);
 		}
+		else if (FieldValue->Type == EJson::String){
+			FString ObjectPathName = FieldValue->AsString();
+			SubObject = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPathName);
+		}
 
-		if (SubObject != nullptr) {
+		if (SubObject != nullptr && bIsSubObjectToImport) {
 			SubObject->Rename(nullptr, Owner);
 		}
 
-		ObjectProperty->SetPropertyValue(FieldData, SubObject);
+		TestProperty.AsObject->SetPropertyValue(FieldData, SubObject);
 	}
 	else {
 		
@@ -561,12 +785,10 @@ void FJsonSerializationModule::DeserializeJsonToUObject(UObject*& Object, TShare
 		if (!JsonObject->HasTypedField<EJson::Object>(FJsonSerializerFields::ObjectPropertiesField.ToString())) return;
 		JsonObjectProperties = JsonObject->GetObjectField(FJsonSerializerFields::ObjectPropertiesField.ToString());
 
+		FString ClassPathName = JsonObject->GetStringField(FJsonSerializerFields::ObjectClassField.ToString());
+		UClass* ObjectClass = StaticLoadClass(UObject::StaticClass(), nullptr, *ClassPathName);
 		
-		if (Object == nullptr) {
-			FString ClassPathName = JsonObject->GetStringField(FJsonSerializerFields::ObjectClassField.ToString());
-			UClass* ObjectClass = StaticLoadClass(UObject::StaticClass(), nullptr, *ClassPathName);
-
-			if (ObjectClass == nullptr) return;
+		if (ObjectClass != nullptr && (Object == nullptr || Object->GetClass() == ObjectClass)) {
 
 			Object = NewObject<UObject>(GetTransientPackage(), ObjectClass);
 
