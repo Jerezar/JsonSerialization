@@ -239,7 +239,7 @@ static TArray<TSharedPtr<FJsonValue>> SerializeMapPropertyAsJsonArray(const void
 		}
 		else if (TestKey.AsObject) // Object
 		{
-			const UObject* SubObject = TestKey.AsObject->GetObjectPropertyValue_InContainer(KeyData);
+			const UObject* SubObject = TestKey.AsObject->GetObjectPropertyValue(KeyData);
 			if (SubObject->IsValidLowLevel() && SubObject->GetOuter() == Outer && !TraversedObjects.Contains(SubObject))
 			{
 				TraversedObjects.Add(SubObject);
@@ -291,7 +291,7 @@ static TArray<TSharedPtr<FJsonValue>> SerializeMapPropertyAsJsonArray(const void
 		}
 		else if (TestValue.AsObject) // Object
 		{
-			const UObject* SubObject = TestValue.AsObject->GetObjectPropertyValue_InContainer(ValueData);
+			const UObject* SubObject = TestValue.AsObject->GetObjectPropertyValue(ValueData);
 			if (SubObject->IsValidLowLevel() && SubObject->GetOuter() == Outer && !TraversedObjects.Contains(SubObject))
 			{
 				TraversedObjects.Add(SubObject);
