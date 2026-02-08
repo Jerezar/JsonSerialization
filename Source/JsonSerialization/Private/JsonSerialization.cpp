@@ -206,16 +206,15 @@ static TArray<TSharedPtr<FJsonValue>> SerializeMapPropertyAsJsonArray(const void
 
 	FPropertyTest TestKey = FPropertyTest(Helper.KeyProp);
 	FPropertyTest TestValue = FPropertyTest(Helper.ValueProp);
-	UE_LOG(LogTemp, Log, TEXT("Map"))
+
 	for (FScriptMapHelper::FIterator Iter = Helper.CreateIterator(); Iter; Iter++) {
 		TSharedPtr<FJsonObject> KeyVal = MakeShared< FJsonObject>();
 
 		uint8* KeyData = Helper.GetKeyPtr(*Iter);
 		uint8* ValueData = Helper.GetValuePtr(*Iter);
 
-		UE_LOG(LogTemp, Log, TEXT("MapIter"))
 		if (KeyData == nullptr || ValueData == nullptr) continue;
-		UE_LOG(LogTemp, Log, TEXT("MapEntry"))
+
 		if (TestKey.AsArray) // Array
 		{
 			TArray<TSharedPtr<FJsonValue>> InnerArray = SerializeArrayPropertyAsJsonArray(KeyData, Outer, TestKey.AsArray, TraversedObjects, bIncludeObjectClasses, bChangedPropertiesOnly);
